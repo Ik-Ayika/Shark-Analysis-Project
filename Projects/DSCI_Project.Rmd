@@ -1,0 +1,418 @@
+---
+title: "DSCI Shark Project"
+author: "Ikemonso"
+date: "2023-05-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Abstract
+
+I will be conducting an analysis on shark attacks reported over the past 100 years, including location, activity, victim info (name, gender, age), shark species, and so on. I will primarily be using the data to truly assess the validity of these cases as well as the true data that sharks pose. I quote the Loyola-resident Shark Expert, Avalon Butler, of whom is totally unbiased (as much as she is beautiful), in the report as well to give commentary on the stigma that sharks have due to movies and shows. This report is to show that sharks are not the bully of the sea, but that humans might be, as well as some fun queries regarding sharks, the data, and, as a special surprise, a "Shark Week" themed analysis!
+
+## Data Wrangling & Cleaning
+
+```{r}
+#Download the data set and the appropriate libraries
+library(readr)
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(mdsr)
+library(janitor)
+library(stringr)
+library(stringi)
+library(ggfittext)
+library(ISOweek)
+attacks <- read_csv("/Users/ikospiko/Desktop/DATA_PROJECTS/Nintendo_DS/Shark Analysis Project/Data/attacks.csv")
+
+#Check the class for every column for reference
+ref <- data.frame(sapply(attacks,class))
+
+#The case number columns are filled with redundant data from the date column. We'll keep one Case number column and leave out the rest. We'll also leave out the href, pdf, area, age, and location info, as these are not relevant to our study and country will suffice for spatial queries. We want to study only complete shark attack cases, so we will omit any data that doesn't at least have at least a case number, a date, and a fatality measure (for a query later on).
+shark_attacks <- attacks %>%
+  select(`Case Number...1`, Date, Year, Type, Country, Area, Location, Activity, Name, Sex, Injury, Fatal = `Fatal (Y/N)`, Species, `Investigator or Source`) %>%
+#Remove spaces from column names
+  rename(Source = `Investigator or Source`,
+         Case_Number = `Case Number...1`) %>%
+#Mutate Date to a date format
+  mutate(Date = ymd(Date),
+         Fatal = ifelse(Fatal %in% c("Y", "N"), Fatal, 
+                        ifelse(tolower(Fatal) == "y", "Y", NA)),
+         Month = month(Date, label = TRUE)) %>% 
+  drop_na(Date) %>% 
+  drop_na(Case_Number)
+
+#Next we will fix the species name column to properly address the sharks we'll be studying. First, we render any NA values as "Unidentified".
+shark_attacks$Species[is.na(shark_attacks$Species)] <- "Unidentified"
+
+#Create a function to remove any measurements in shark species
+format_string <- function(string){
+  string <- unlist(str_extract_all(string, "([A-Za-z]+)"))
+  string <- string[str_length(string) > 2]
+  string <- str_to_lower(paste(string, collapse = " "))
+  string
+}
+
+#Map across all species
+shark_attacks$Updated_Species <-  unlist(map(shark_attacks$Species, format_string))
+
+#Create numerous columns for new shark names 
+shark_attacks <- shark_attacks %>% 
+  mutate(New_Species = case_when(
+    str_detect(Updated_Species,"albimarginatus")~"Silvertip shark",
+    str_detect(Updated_Species,"angel shark")~"Angel shark",
+    str_detect(Updated_Species,"banjo")~"Banjo shark",
+    str_detect(Updated_Species,"blacktip reef shark|caribbean reef shark|reef shark|gray reef|grey")~"Reef shark",
+    str_detect(Updated_Species,"blacktip shark|limbatus")~"Blacktip shark",
+    str_detect(Updated_Species,"spinner shark")~"Spinner shark",
+    str_detect(Updated_Species,"blue whaler|blue")~"Blue shark",
+    str_detect(Updated_Species,"sevengill shark|gill shark")~"Broadnose Sevengill shark",
+    str_detect(Updated_Species,"bronze whaler")~"Copper shark",
+    str_detect(Updated_Species,"bull shark|leucas|zambezi shark|zambesi shark|zambezi shark")~"Bull shark",
+    str_detect(Updated_Species,"lemon shark")~"Lemon shark",
+    str_detect(Updated_Species,"tiger shark")~"Tiger shark",
+    str_detect(Updated_Species,"sandbar shark|brown")~"Sandbar shark",
+    str_detect(Updated_Species,"white shark")~"Great white shark",
+    str_detect(Updated_Species,"copper shark")~"Copper shark",
+    str_detect(Updated_Species,"cow shark")~"Cow shark",
+    str_detect(Updated_Species,"dogfish shark|spurdog")~"Dogfish shark",
+    str_detect(Updated_Species,"dusky shark")~"Dusky shark",
+    str_detect(Updated_Species,"galapagos shark")~"Galapagos shark",
+    str_detect(Updated_Species,"gummy shark")~"Gummy shark",
+    str_detect(Updated_Species,"hammerhead")~"Hammerhead shark",
+    str_detect(Updated_Species,"heterodontus francisci")~"Horn shark",
+    str_detect(Updated_Species,"dogfish scyliorhinus canicula")~"Small-spotted Catshark",
+    str_detect(Updated_Species,"mako shark|shortfin mako shark")~"Shortfin Mako shark",
+    str_detect(Updated_Species,"carcharhinid shark")~"Requiem shark",
+    str_detect(Updated_Species,"nurse shark")~"Nurse shark",
+    str_detect(Updated_Species,"oceanic whitetip")~"Oceanic whitetip shark",
+    str_detect(Updated_Species,"porbeagle shark")~"Porbeagle shark",
+    str_detect(Updated_Species,"port jackson shark")~"Port Jackson shark",
+    str_detect(Updated_Species,"raggedtooth shark|sand shark")~"Sand shark",
+    str_detect(Updated_Species,"salmon shark")~"Salmon shark",
+    str_detect(Updated_Species,"silky shark")~"Silky shark",
+    str_detect(Updated_Species,"whale shark")~"Whale shark",
+    str_detect(Updated_Species,"thresher shark")~"Thresher shark",
+    str_detect(Updated_Species,"cookie cutter shark")~"Cookie-Cutter shark",
+    str_detect(Updated_Species,"wobbegong")~"Wobbegong shark",
+    str_detect(Updated_Species,"shark|unidentified")~"Unidentified",
+    TRUE~"Not shark"
+    )
+) %>% 
+  filter(!is.na(Fatal)) %>% 
+#Now we'll select the columns we'll use
+  select(Case_Number, Name, Sex, Fatal, Date, Year, Month, Country, Activity, Type, Injury, New_Species, Source)
+
+#Check the amount of NA's to confirm Case and Date are removed. Use summarize to count the number of NA values in each column and pivot to visualize just how much data is NA
+is_it_na <- shark_attacks %>%
+  summarise_all(funs(sum(is.na(.)))) %>% 
+  pivot_longer(everything() , names_to = "Columns", values_to = "Sum_NA") %>% 
+  filter(Columns == "Case_Number" | Columns == "Date" | Columns =="Year")
+is_it_na
+
+#No NA's, let's get to work.
+View(shark_attacks)
+```
+
+## Untruth...or Unlucky?
+
+### Let's first see how many people - if any - are either reporting it for publicity stunt or are just that unlucky! We'll measure this by checking for any repeats
+
+```{r}
+#First we'll create a table without any fatalities whatsoever and see if any names pop up
+unluck <- shark_attacks %>%
+  drop_na(Name) %>%
+  filter(!str_detect(Injury, "\\b[Ff]ATAL\\b") |
+         !str_detect(Injury, "\\b[Ff]atal\\b") |
+          (Fatal == "Y" & !is.na(Fatal))) %>% 
+  mutate(Newname = (Name = TRUE) + 0) %>% 
+  group_by(Name) %>% 
+  summarize(NameCount = sum(Newname)) %>% 
+  filter(NameCount > 1) %>% 
+  arrange(-NameCount)
+
+unluck
+
+#We seem to have lots of identity pointers but not a lot of names. We'll filter so we just have first and last names to check for any liars (*ahem* I mean unfortunate individuals) and see what we get
+first_and_last <- shark_attacks %>%
+  drop_na(Name) %>%
+  filter(!str_detect(Injury, "\\b[Ff]ATAL\\b") |
+         !str_detect(Injury, "\\b[Ff]atal\\b") |
+          (Fatal != "Y" & !is.na(Fatal))) %>% 
+  filter(str_detect(Name, "\\b[A-Z][a-z]+\\s[A-Z][a-z]+\\b") |
+         str_detect(Name, "\\b[A-Z][a-z]+\\s?[A-Za-z]*\\s[A-Z][a-z]+\\b")) %>% 
+  mutate(Name = str_replace(Name, "boat, occupant: Danie Schoeman", "Danie Schoeman"),
+         Name = str_replace(Name, "skiDanie Schoeman", "Danie Schoeman"),
+         Name = str_replace(Name, "Rory O\x92Connor", "Rory O'Conner")) %>% 
+  mutate(Newname = (Name = TRUE) + 0) %>% 
+  group_by(Name) %>% 
+  summarize(NameCount = sum(Newname)) %>% 
+  filter(NameCount > 1) %>% 
+  arrange(-NameCount)
+
+first_and_last
+
+#Looks like we have a couple of potential liars (or repeats if you want to be specific), let's make a function that gives us their injuries so we can check for matches
+#Pull the names from the list into a new vector to use an input data
+liar_names <- unlist(first_and_last$Name)
+
+#Create a function to pull injuries with at least one matching word
+liar_func <- function(name){
+  shark_attacks %>% 
+    drop_na(Name) %>%
+  filter(!str_detect(Injury, "\\b[Ff]ATAL\\b") |
+         !str_detect(Injury, "\\b[Ff]atal\\b") |
+          (Fatal != "Y" & !is.na(Fatal))) %>% 
+  filter(str_detect(Name, "\\b[A-Z][a-z]+\\s[A-Z][a-z]+\\b") |
+         str_detect(Name, "\\b[A-Z][a-z]+\\s?[A-Za-z]*\\s[A-Z][a-z]+\\b")) %>% 
+  mutate(Name = str_replace(Name, "boat, occupant: Danie Schoeman", "Danie Schoeman"),
+         Name = str_replace(Name, "skiDanie Schoeman", "Danie Schoeman"),
+         Name = str_replace(Name, "Rory O\x92Connor", "Rory O'Conner")) %>% 
+    filter(Name == name) %>%
+#Added a second non-Fatal filter because R wants them to be dead, I suppose
+    filter(Fatal != "Y") %>% 
+    select(Name, Injury)
+}
+liar_df <- map_df(liar_names, liar_func)
+liar_df
+
+```
+
+So, looks like we have no liars after all! It does seem as though we have some that incidents of provocation, but none of the same person. We did find one person that the table deemed unlucky, though. `r liar_df[23,1]` with the injury: `r liar_df[23,2]`. We'll consider humans good...for now.
+
+## Sharks...Love-Bites or Fatalities
+
+### Next, let's look at the level of these injuries. Obviously there are many fatalities, but we want to see what kind of injuries are most prevalent and if all the fatalities we see on the news or movies are the majority after all.
+
+```{r}
+#First we'll make the tables of no injuries, regular injuries (everything in between death and a paper cut), and fatal injuries. I'll do a filter case for how one injury should NOT be another and DESIRED specifier
+no_injury <- shark_attacks %>% 
+  filter(str_detect(Injury, "\\b[Nn]o\\s[Ii]njury\\b") &
+        !str_detect(Injury, "\\b[Ff]ATAL\\b") &
+        !str_detect(Injury, "\\b[Ff]atal\\b") &
+        (Fatal != "Y")) %>% 
+  mutate(Injury_detect = (Injury = "NONE")) %>% 
+  select(Case_Number, Injury_detect, Injury)
+
+normal_injury <- shark_attacks %>%  
+   filter(!str_detect(Injury, "\\b[Nn]o\\s[Ii]njury\\b") &
+          !str_detect(Injury, "\\b[Ff]ATAL\\b") &
+          !str_detect(Injury, "\\b[Ff]atal\\b") &
+          (Fatal != "Y")) %>% 
+  mutate(Injury_detect = (Injury = "NORMAL")) %>% 
+  select(Case_Number, Injury_detect, Injury)
+
+fatal_injury <- shark_attacks %>% 
+  filter(!str_detect(Injury, "\\b[Nn]o\\s[Ii]njury\\b") &
+         (str_detect(Injury, "\\b[Ff]ATAL\\b") |
+          str_detect(Injury, "\\b[Ff]atal\\b")) &
+        (Fatal == "Y")) %>% 
+  mutate(Injury_detect = (Injury = "FATAL")) %>% 
+  select(Case_Number, Injury_detect, Injury)
+
+#Join all three tables and plot the cases with the new Injury Detect column, fixing some double-assignments
+Injuries <- no_injury %>% 
+  full_join(normal_injury, by = "Case_Number") %>% 
+  full_join(fatal_injury, by = "Case_Number") %>% 
+  mutate(CaseCount = (Case_Number = TRUE) + 0) %>% 
+  unite("Injury_Detect", Injury_detect.x, Injury_detect.y, Injury_detect, sep = ", ") %>% 
+  mutate(Injury_Detect = str_replace_all(Injury_Detect, "NONE, NA, NA", "NONE")) %>% 
+  mutate(Injury_Detect = str_replace_all(Injury_Detect, "NONE, NORMAL, NA", "NONE")) %>% 
+  mutate(Injury_Detect = str_replace_all(Injury_Detect, "NA, NORMAL, NA", "NORMAL")) %>% 
+  mutate(Injury_Detect = str_replace_all(Injury_Detect, "NA, NORMAL, FATAL", "FATAL")) %>% 
+  mutate(Injury_Detect = str_replace_all(Injury_Detect, "NA, NA, FATAL", "FATAL")) %>% 
+  mutate(Injury_Detect = factor(Injury_Detect, levels = c("NONE", "NORMAL", "FATAL"))) %>% 
+  group_by(Injury_Detect) %>% 
+  summarize(Cases = sum(CaseCount))
+Injuries
+
+#Let's plot
+Injury_plot <- ggplot(aes(x = Injury_Detect, y = Cases), data = Injuries) + 
+  geom_col(aes(fill = Injury_Detect), stat = "identity") +
+  geom_text(aes(label= Cases), position=position_dodge(width=0.9), vjust=-0.25) +
+  labs(title = "The Amount of Cases based on Injury Type", x = "Injury Type", y = "Number of Cases") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+Injury_plot
+```
+
+As we can see, the amount of shark attacks that were fatal were vastly lower than that of livable, yet still unfortunate, attacks (and were only slightly higher than attacks with no injuries at all). As Chris Evans famously said whilst playing Captain America in *Age of Ultron*, "You get killed, walk it off".
+
+## Equal Opportunity Sharks
+
+### With our data we can also look at the amount of shark attacks with male and female victims stratified by country, finally answering life's greatest question: "Are sharks sexist? And if they are, which ones?"
+
+```{r}
+#First we drop NA values and create a table with our limited gender inputs (male and female) and take the top 5 countries with the highest male and female count
+sexist_sharks <- shark_attacks %>% 
+  filter(!is.na(Sex) &
+         (Sex == "M" | Sex == "F")) %>% 
+  mutate(s_count = (Sex = TRUE) + 0) %>% 
+  group_by(Sex, Country) %>% 
+  summarize(Gender_Count = sum(s_count)) %>% 
+  pivot_wider(names_from = Sex, values_from = Gender_Count) %>% 
+  arrange(-F, -M) %>% 
+  head(5)
+
+sexist_sharks
+
+#Now that we have the data, we'll reshape it back to the original long format for a nice visualization
+s_plot_data <- sexist_sharks %>% 
+  pivot_longer(cols = c("M", "F"), names_to = "Sex", values_to = "Gender_Count") %>% 
+  mutate(Country = factor(Country, levels = c("USA",	"AUSTRALIA","SOUTH AFRICA", "NEW ZEALAND", "BAHAMAS")))
+
+s_plot <- ggplot(aes(x = Country, y = Gender_Count, fill = Sex, label = Gender_Count),
+                 data = s_plot_data) +
+  geom_col(position = position_stack(reverse = TRUE)) +
+  labs(title = "Amount of People Affected by Attacks based on Sex", x = "Country",
+       y = "Amount of People") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_text(position = position_stack(reverse = TRUE), size = 3)
+
+s_plot
+```
+
+Well we can officially breathe a sigh of relief! There seems to be a majority of males in the top three countries with the most known (specifically gender-assigned) victims of attacks. We could learn a thing or two from sharks. Lesson One: Get rid of the men.
+
+## The True Bullies of the Sea
+
+### Let's look at the amount of sharks that've given people the most trouble in comparison with the amount PEOPLE that have given sharks the most trouble (i.e., sharks that were either unprovoked or provoked).
+
+```{r}
+#First let's look at all the instances of provoked shark accidents vs. unprovoked
+#Let's reference how many NA's there are in the Type column
+sum(is.na(shark_attacks$Type))
+
+#We have one so we'll fix that as well as a truer Type column
+provocation <- shark_attacks %>% 
+  mutate(Provocation = ifelse(is.na(shark_attacks$Type), "Unknown",
+                              ifelse(shark_attacks$Type == "Provoked" |
+                                       str_detect(shark_attacks$Injury, regex("provoked", ignore_case = TRUE)), "Provoked",
+                                     ifelse(shark_attacks$Type == "Unprovoked" |
+                                              str_detect(shark_attacks$Injury, regex("unprovoked", ignore_case = TRUE)), "Unprovoked", "Inconclusive"))),
+         Provcount = (Provocation = TRUE) + 0) %>%
+  group_by(Provocation) %>% 
+  summarize(Provocation_Count = sum(Provcount)) %>% 
+  mutate(Provocation = factor(Provocation, levels = c("Unknown", "Provoked", "Inconclusive", "Unprovoked")))
+provocation
+
+#Let's visualize
+provocation_graph <- ggplot(aes(x = Provocation, y = Provocation_Count, fill = Provocation, label = Provocation_Count), data = provocation) +
+  geom_col() +
+  labs(title = "Shark Attack Cases based on Provocation",
+       y = "Amount of Cases") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_text(size = 5) +
+  coord_flip()
+
+provocation_graph
+
+#Now let's see which shark, specifically is the shark responsible for the most attacks
+angriest_shark <- shark_attacks %>% 
+  mutate(Provocation = ifelse(is.na(shark_attacks$Type), "Unknown",
+                              ifelse(shark_attacks$Type == "Provoked" |
+                                       str_detect(shark_attacks$Injury, regex("provoked", ignore_case = TRUE)), "Provoked",
+                                     ifelse(shark_attacks$Type == "Unprovoked" |
+                                              str_detect(shark_attacks$Injury, regex("unprovoked", ignore_case = TRUE)), "Unprovoked", "Inconclusive"))),
+         Provcount = (Provocation = TRUE) + 0) %>%
+  group_by(Provocation, New_Species) %>% 
+  summarize(Provocation_Count = sum(Provcount)) %>% 
+  mutate(Provocation = factor(Provocation, levels = c("Unknown", "Provoked", "Inconclusive", "Unprovoked"))) %>% 
+  filter(New_Species != "Unidentified") %>% 
+  arrange(-Provocation_Count) %>% 
+  head(1) %>% 
+  pull(New_Species)
+
+angriest_shark
+```
+
+Provoked, in this case, means that people had done some action to "egg the shark on". And, as we can see, humans are not perfect. Now, it may not be a surprise that the species responsible for the most attacks happens to be `r angriest_shark`. There might always be some stigmas against Great Whites and Bull sharks for being "dangerous" or "scary" and some data to show that, but resident shark expert, Avalon Butler, claims that, "They're the dogs of the sea[...]they're just super curious about everything[...]most shark attacks from Great Whites aren't meant to endanger us[...]they're just curious about how humans are and the only way sharks can investigate is through biting!"
+
+## Shark of the Century!
+
+### Now that we've established location, we'll also see if any trends can be gleaned from the years, specifically the centures because years are basic
+
+```{r}
+#Amount of cases by date and month
+shark_year <- shark_attacks %>% 
+  mutate(casect = (Case_Number = TRUE) + 0) %>%
+  mutate(Century = cut(Year, breaks = seq(1600, 2100, by = 100), labels = c("17th", "18th", "19th", "20th", "21st"), include.lowest = TRUE)) %>%
+  group_by(Century) %>% 
+  summarize(Case_Count = sum(casect))
+  
+shark_year          
+
+#Let's plot
+ggplot(shark_year, aes(x = Century, y = Case_Count, label = Case_Count, color = Century)) +
+  geom_col() +
+  labs(title = "Shark Attacks by Year",
+       x = "Century",
+       y = "Case_Count") +
+  scale_x_discrete(labels = c("17th", "18th", "19th", "20th", "21st")) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_text(size = 5)
+  
+```
+
+I guess Jaws (released in 1975) really had a number on us! As the most attacks occurred in the 20th century, which, in turn had a 60 case increase from the 19th century. Will we beat em before our century is over? Maybe another Jaws movie will help!
+
+## Shark Week
+
+### For the little grand finale, we will also find every year's true Shark Week: The week where there were the most shark attacks.
+
+```{r}
+
+s_week <- function(year){
+  shark_attacks %>% 
+    filter(Year == year) %>% 
+    mutate(casect3 = (Case_Number = TRUE) + 0) %>% 
+    mutate(Week = isoweek(Date)) %>% 
+    group_by(Week) %>% 
+    summarize(Case_Count = sum(casect3)) %>% 
+    arrange(-Case_Count) %>% 
+    head(1) %>% 
+    pull(Week)
+}
+
+#We'll use a list of all the years in our data set to map and then visualize results
+Yearlist <- unique(shark_attacks$Year)
+
+shark_map <- unlist(map(Yearlist, s_week))
+#Now we'll extract the date ranges by reformatting the dates with a formula. This uses week number to add the number of days until the first day of that week and then 6 more to represent the last day
+shark_week <- data_frame(Year = Yearlist, Week_Number = shark_map) %>% 
+  mutate(Week = str_c(format(as.Date(paste0(Year, "-01-01")) + (Week_Number - 1) * 7, "%B %d"),
+                      format(as.Date(paste0(Year, "-01-01")) + (Week_Number - 1) * 7 + 6, " - %B %d, %Y"),
+                      sep = " "))
+
+#To help with visualization
+shark_week_plot <- shark_week %>% 
+  ggplot(aes(x = Year, y = Week_Number)) +
+  geom_point() +
+  labs(title = "Shark Week Number For Each Year", x = "Year",
+       y = "Week Number") +
+  theme(plot.title = element_text(hjust = 0.5))
+  
+shark_week_plot
+
+#How many were in the second half of the year?
+first_half <- shark_week %>% 
+  filter(Week_Number <= 26) %>% 
+  nrow()
+
+first_half  
+
+second_half <- shark_week %>% 
+  filter(Week_Number > 26) %>% 
+  nrow()
+
+second_half  
+```
+
+Looks like `r shark_week[1,3]` was the last "shark week" that the data would celebrate, and it seems that many years had their own shark week in the first half of the year with `r first_half` in the first half and `r second_half` in the second.
+
+## Thank you for looking at my project!
+Credit: https://www.kaggle.com/datasets/mysarahmadbhat/shark-attacks
